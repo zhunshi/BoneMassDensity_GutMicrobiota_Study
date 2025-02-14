@@ -7,6 +7,17 @@ library(metastat)
 library(reshape2)
 
 
+
+#-------------------------------------------------------------------------------
+# alpha diversity (Shannon)
+dat.shannon <- vegan::diversity(profile)                   
+
+# beta diversity (PCoA)
+bray_dis <- vegdist(profile, method = 'bray')  
+pcoa <- cmdscale(bray_dis,k=2,eig=T)
+
+
+
 #-------------------------------------------------------------------------------
 # Enterotyping
 
@@ -103,7 +114,14 @@ pcc_between <- function (dat1, dat2, dat_adj){
 
 
 
+                   
+#-------------------------------------------------------------------------------
 
 
 
 
+
+
+
+
+                   
