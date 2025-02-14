@@ -80,8 +80,49 @@ kBest <- function(data, dist , method = "kmeans"){
 }
 
 
+# prodominant genera within ETB and ETP
+ContributorsEnterotypes <- function(et,pr){
+  a <- apply(pr,2,mean)
+  a <- as.data.frame(a)
+  a <- a[order(a[,1],decreasing = T),,drop=F]
+  # only focus on top10 genera
+  l <- rownames(a)[1:10]
+  a <- cbind(et,pr[rownames(et),l])
+  a <- a %>%
+    group_by(ET) %>%
+    summarise_all(mean) %>%
+    gather(taxa,mean,-ET)
+  a$taxa <- factor(a$taxa,levels = rev(l))
+
+  # color selection
+  col <- colorRampPalette(RColorBrewer::brewer.pal(8,"Set3"))(10)
+  col <- rev(col)
+  #col <- RColorBrewer::brewer.pal(9,"Set3")
+  #col <- rev(col)
+
+  
+  ggplot(a,aes(x=ET,y=mean,fill=taxa,alluvium=taxa))+
+    ggalluvial::geom_flow(stat = "alluvium",lode.guidance = "frontback", color = "darkgray") + 
+    ggalluvial::geom_stratum(stat = "alluvium") +
+    scale_fill_manual(values = col)+
+    #scale_fill_brewer(palette = "Set3")+
+    theme(legend.position = "right")+
+    scale_y_continuous(expand = expansion(mult = c(0,0.1)))+
+    scale_x_discrete(expand = expansion(mult = c(0.15,0.15)))+
+    xlab("")+ylab("Mean relative abundance") +
+    theme_pubr() +
+    theme(
+      axis.title = element_text(size = 14),
+      axis.text = element_text(size = 13),
+      legend.title = element_text(size = 14),
+      legend.text = element_text(size = 13),
+      legend.position = "right"
+    )
+}                   
 
 
+
+                   
 #-------------------------------------------------------------------------------
 # Partial Spearman's associations
 pcc_between <- function (dat1, dat2, dat_adj){
@@ -116,12 +157,134 @@ pcc_between <- function (dat1, dat2, dat_adj){
 
                    
 #-------------------------------------------------------------------------------
+# barplot for phenotypes (Fig2e,d)
+BarplotPercentage <- function (dat, x, group, yaxies = "p") {
+    dat$group1 <- dat[, x]
+    dat$group2 <- dat[, group]
+    dat <- dat %>% 
+    dplyr::select(group1, group2) %>% 
+    group_by(group1) %>% 
+    count(TargetGroup = group2, .drop = F) %>% 
+    mutate(pct = prop.table(n), 
+        lab.p = paste0(round(pct * 100, 1), "%"), 
+        y.p = pct/2 + c(rev(cumsum(rev(pct))[-length(levels(TargetGroup))]), 0), 
+        lab.n = n, 
+        y.n = n/2 + c(rev(cumsum(rev(n))[-length(levels(TargetGroup))]), 0))
+    y = ifelse(yaxies == "n", "n", "pct")
+    ylab = ifelse(yaxies == "n", "Number", "Percentage")
+    ggplot(dat, aes_string(x = "group1", y = y, fill = "TargetGroup")) + 
+        geom_bar(stat = "identity") + 
+        geom_text(aes_string(y = ifelse(ylab == "Number", "y.n", "y.p"), label = "lab.n")) + 
+        scale_y_continuous(expand = expansion(mult = c(0,  0.1))) + 
+        xlab("") + 
+        ylab(ylab) + 
+        theme_bw()
+}
 
 
 
 
+#-------------------------------------------------------------------------------
+# scaltterplot for association between Age and BMD within ETB and ETP (Fig4)
+scatterplot <- function (dat, x, y, group = NULL,adj=NULL) {
+  dat <- dat[!is.na(dat[, x]), , drop = F]
+  if(is.null(adj)){
+    s0 <- cor.test(dat[, x], dat[, y], method = "s")
+  }else{
+    adj <- adj[rownames(dat),,drop=F]
+    s0 <- pcor.test(dat[,x],dat[,y],adj,method = "s")
+  }
+  lst_levels <- levels(as.factor(dat[, group]))
+  lab <- c()
+  for (l in lst_levels) {
+    id <- dat[, group] == l
+    if(is.null(adj)){
+      a <- cor.test(dat[id, x], dat[id, y], method = "s")
+    }else{
+      a <- pcor.test(dat[id,x],dat[id,y],adj[id,,drop=F],method = "s")
+    }
+    lab <- c(lab, paste0(l, " rho=", round(a$estimate, 3), "; p=", formatC(a$p.value, digits = 2)))
+  }
+  lab <- paste(lab, collapse = "\n")
+  p <- ggplot(dat, aes_string(x, y, color = group)) + 
+    geom_point(size = 2, alpha = 0.5,aes_string(fill=group),color="white",shape=21) + 
+    geom_smooth(method = "lm", se = F, size = 1) + 
+    annotate("text", x = -Inf, y = Inf, vjust = 1.2, hjust = 0, label = lab, size = 3) + 
+    theme_bw()
+  p
+}
+                   
 
 
 
+                   
+
+#-------------------------------------------------------------------------------
+# Odds ratio
+library(questionr)
+dat <- cbind(et[,1,drop=F],dat.adj[rownames(et),],phe[rownames(et),"BMD_group",drop=F])
+
+OR <- function(dat,lab.x,lab.y){
+  formula <- as.formula(paste0(lab.y,"~",paste(lab.x,collapse = "+")))
+  res <- glm(formula, data = dat, family = binomial)
+  
+  or <- odds.ratio(res)
+  or <- as.data.frame(or)
+  or <- or[2,,drop=F]
+  
+  return(or)
+}
+
+MultipleVariableOR <- function(dat,labs.x,labs.y,labs.adj){
+  out <- list()
+  for(i in labs.x){
+    for(j in labs.y){
+      name <- paste(j,i,sep = "-")
+      out[[name]] <- OR(dat,c(i,labs.adj),j)
+    }
+  }
+  out2 <- do.call(rbind,out)
+  out2 <- out2 %>%
+    rownames_to_column(var="Factors") %>%
+    separate(Factors,c("Disease","Factors"),sep="-") %>%
+    mutate(
+      Factors = factor(Factors,levels = labs.x),
+      Disease = factor(Disease,levels = labs.y)
+    )
+  return(out2)
+}
+or <- function(dat1,dat.adj){
+  res1 <- MultipleVariableOR(dat1,"Age","y",colnames(dat.adj)[-2])
+  res3 <- MultipleVariableOR(dat1[dat1$ET=="ET_B",],"Age","y",colnames(dat.adj)[-2])
+  res5 <- MultipleVariableOR(dat1[dat1$ET=="ET_P",],"Age","y",colnames(dat.adj)[-2])
+
+  a <- rbind(res1,res3,res5)
+  a$Disease <- "ON/OP vs. NC"
+  a$Group <- c("Overall","ET-B",'ET-P')
+  a$Group <- factor(a$Group,levels = c("Overall","ET-B",'ET-P'))
+  a
+}
+
+
+
+# forest plot for odds ratio
+HR_Forest <- function(dat){
+  dat <- dat[-1,]
+  dat <- as.data.frame(dat)
+  dat$` ` <- paste(rep(" ", 20), collapse = " ")
+  dat[,"OR (95% CI)"] <- paste0(round(dat$OR,2)," (",round(dat$`2.5 %`,2)," to ",round(dat$`97.5 %`,2),")")
+  dat$p <- formatC(dat$p,digits = 2)
+  forestploter::forest(
+    data = dat[,c(7,8,9,6),drop=F],
+    est=dat$OR,
+    lower = dat$`2.5 %`,
+    upper = dat$`97.5 %`,
+    ci_column = 2,
+    ref_line = 1,
+    sizes = 0.6,
+    xlim = c(0.5,9),
+    ticks_at = c(1,2,4,6,8)
+  )
+}                   
 
                    
